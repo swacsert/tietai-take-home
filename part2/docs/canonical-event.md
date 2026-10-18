@@ -25,8 +25,9 @@ either side can be rerun or replaced as long as this contract holds.
 These never become events, and they are never dropped silently:
 
 - An HL7 message the ingestor cannot parse goes to `out/dlq/` with the reason.
-- A FHIR Encounter that cannot be mapped goes to `out/dlq/` as a small Bundle with its Patient and
-  linked resources, ready to fix and replay. A bundle that is not valid JSON goes whole, as position 0.
+- A FHIR Encounter that cannot be mapped goes to `out/dlq/` as the Encounter's JSON, exactly as it is
+  in the bundle. Its Patient and linked resources stay in the input file. A bundle that is not valid
+  JSON goes whole, as position 0.
 - A FHIR resource that hangs from no `Encounter` is **counted** in the ingestor's run summary, by resource type.
 
 ## Identity and deduplication

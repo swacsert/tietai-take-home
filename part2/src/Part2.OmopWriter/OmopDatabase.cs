@@ -3,15 +3,17 @@ using Microsoft.Data.Sqlite;
 namespace Part2.OmopWriter;
 
 /// <summary>
-/// The SQLite file: three OMOP CDM 5.4 tables (all their columns, unused ones left NULL) plus two
-/// etl_* tables the loader needs for idempotency and quarantine. The etl_* tables are not OMOP.
+/// The SQLite file: three OMOP CDM 5.4 tables (with all their columns, the unused ones left NULL) plus
+/// two etl_* tables the loader needs for idempotency and quarantine. The etl_* tables are not OMOP.
 /// </summary>
 internal static class OmopDatabase
 {
     public static readonly string[] Tables =
-        ["person", "visit_occurrence", "condition_occurrence", "etl_event", "etl_quarantine"];
+    {
+        "person", "visit_occurrence", "condition_occurrence", "etl_event", "etl_quarantine",
+    };
 
-    private const string Schema = """
+    private const string Schema = @"
         CREATE TABLE IF NOT EXISTS person (
             person_id                   INTEGER PRIMARY KEY,
             gender_concept_id           INTEGER NOT NULL,
@@ -32,7 +34,7 @@ internal static class OmopDatabase
             ethnicity_source_value      TEXT    NULL,
             ethnicity_source_concept_id INTEGER NULL
         );
-        -- One row per real patient: the natural key is "{canonical issuer}:{patient id}".
+        -- One row per real patient: the natural key is '{canonical issuer}:{patient id}'.
         CREATE UNIQUE INDEX IF NOT EXISTS ux_person_source ON person (person_source_value);
 
         CREATE TABLE IF NOT EXISTS visit_occurrence (
@@ -54,7 +56,7 @@ internal static class OmopDatabase
             discharged_to_source_value    TEXT    NULL,
             preceding_visit_occurrence_id INTEGER NULL
         );
-        -- A person has many visits; one row per source visit ("hl7:{patient}:{admit}" or "fhir:{encounter id}").
+        -- A person has many visits; one row per source visit ('hl7:{patient}:{admit}' or 'fhir:{encounter id}').
         CREATE UNIQUE INDEX IF NOT EXISTS ux_visit_source ON visit_occurrence (person_id, visit_source_value);
 
         CREATE TABLE IF NOT EXISTS condition_occurrence (
@@ -78,7 +80,7 @@ internal static class OmopDatabase
         -- Diagnoses accumulate per visit (D23): one row per source code on a visit.
         CREATE UNIQUE INDEX IF NOT EXISTS ux_condition_visit_source ON condition_occurrence (visit_occurrence_id, condition_source_value);
 
-        -- Every event loaded, with the hash that was loaded: tells a retransmission from a conflict.
+        -- Every event loaded, with the hash that was loaded: this tells a retransmission from a conflict.
         CREATE TABLE IF NOT EXISTS etl_event (
             event_id        TEXT    PRIMARY KEY,
             content_hash    TEXT    NOT NULL,
@@ -94,25 +96,32 @@ internal static class OmopDatabase
             reason       TEXT NOT NULL,
             line         TEXT NOT NULL,
             UNIQUE (event_id, content_hash)
-        );
-        """;
+        );";
 
-    /// <summary>Opens (or creates) the database file with foreign keys on and the schema in place.</summary>
+    /// <summary>Opens (or creates) the database file, with foreign keys on and the schema in place.</summary>
     public static SqliteConnection Open(string path)
     {
         // No pooling: a batch run holds one connection, and the file must be free when the run ends.
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+        var builder = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false };
+        var connection = new SqliteConnection(builder.ToString());
         connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "PRAGMA foreign_keys = ON;" + Schema;
-        command.ExecuteNonQuery();
+
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.CommandText = "PRAGMA foreign_keys = ON;" + Schema;
+            command.ExecuteNonQuery();
+        }
+
         return connection;
     }
 
     public static long CountRows(SqliteConnection connection, string table)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT COUNT(*) FROM {table}"; // table names come from the Tables constant only
-        return (long)command.ExecuteScalar()!;
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            // The table name comes from the Tables constant only, never from input.
+            command.CommandText = $"SELECT COUNT(*) FROM {table}";
+            return (long)command.ExecuteScalar()!;
+        }
     }
 }

@@ -2,32 +2,34 @@ using Part2.Canonical;
 
 namespace Part2.Ingest.Hl7;
 
-/// <summary>Reads a batch of HL7 messages; one bad message goes to the DLQ and the batch goes on.</summary>
+/// <summary>Reads a batch of HL7 messages. A bad message goes to the DLQ and the batch goes on.</summary>
 internal static class Hl7Feed
 {
     public static IngestResult Ingest(string text, string fileName)
     {
         var events = new List<CanonicalEvent>();
         var deadLetters = new List<DeadLetter>();
-        var position = 0;
+        int position = 0;
 
-        foreach (var lines in SplitMessages(text))
+        foreach (IReadOnlyList<string> lines in SplitMessages(text))
         {
             position++;
+            string raw = string.Join('\n', lines);
             try
             {
-                events.Add(Hl7EventMapper.Map(Hl7Message.Parse(lines), fileName, position));
+                Hl7Message message = Hl7Message.Parse(lines);
+                events.Add(Hl7EventMapper.Map(message, fileName, position));
             }
             catch (InvalidMessageException ex)
             {
-                deadLetters.Add(new DeadLetter(position, string.Join('\n', lines), ex.Message));
+                deadLetters.Add(new DeadLetter(position, raw, ex.Message));
             }
             catch (Exception ex)
             {
                 // Deliberately broad. The feed is untrusted: if one message hits a bug in this parser,
                 // that message goes to the DLQ and the other messages are still processed. The exception
                 // type in the reason points at the bug; its message is left out because it may quote the input.
-                deadLetters.Add(new DeadLetter(position, string.Join('\n', lines), $"unexpected error ({ex.GetType().Name})"));
+                deadLetters.Add(new DeadLetter(position, raw, $"unexpected error ({ex.GetType().Name})"));
             }
         }
 
@@ -35,18 +37,21 @@ internal static class Hl7Feed
     }
 
     /// <summary>
-    /// Segments end with \r (the HL7 standard), \n or \r\n. A message ends at a blank line or where
-    /// the next MSH starts.
+    /// Splits the feed into messages. Segments end with \r (the HL7 standard), \n or \r\n.
+    /// A message ends at a blank line or where the next MSH starts.
     /// </summary>
     internal static IEnumerable<IReadOnlyList<string>> SplitMessages(string text)
     {
+        string normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
         var current = new List<string>();
-        foreach (var line in text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+
+        foreach (string line in normalized.Split('\n'))
         {
-            if (current.Count > 0 && (line.Length == 0 || line.StartsWith("MSH", StringComparison.Ordinal)))
+            bool messageEnds = line.Length == 0 || line.StartsWith("MSH", StringComparison.Ordinal);
+            if (messageEnds && current.Count > 0)
             {
                 yield return current;
-                current = [];
+                current = new List<string>();
             }
 
             if (line.Length > 0)

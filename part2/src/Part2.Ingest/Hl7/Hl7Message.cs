@@ -23,35 +23,26 @@ internal sealed class Hl7Message
 
     public IReadOnlyList<Hl7Segment> Segments { get; }
 
-    /// <summary>Parses the lines of one message; throws <see cref="InvalidMessageException"/> if it is not HL7.</summary>
+    /// <summary>Parses the lines of one message. Throws InvalidMessageException if it is not HL7.</summary>
     public static Hl7Message Parse(IReadOnlyList<string> lines)
     {
-        var header = lines[0];
+        string header = lines[0];
         if (!header.StartsWith("MSH", StringComparison.Ordinal) || header.Length < 8)
         {
             throw new InvalidMessageException("first segment is not MSH");
         }
 
-        var fieldSeparator = header[3];
-        var encodingEnd = header.IndexOf(fieldSeparator, 4);
-        var encodingCharacters = encodingEnd < 0 ? header[4..] : header[4..encodingEnd];
-
-        // HL7 v2.5 declares four encoding characters (v2.7 adds a fifth); all must be distinct
-        // punctuation, otherwise splitting would be ambiguous.
-        var usable = IsSeparator(fieldSeparator)
-            && encodingCharacters.Length is 4 or 5
-            && encodingCharacters.All(IsSeparator)
-            && encodingCharacters.Distinct().Count() == encodingCharacters.Length
-            && !encodingCharacters.Contains(fieldSeparator);
-        if (!usable)
+        char fieldSeparator = header[3];
+        string encodingCharacters = ReadEncodingCharacters(header, fieldSeparator);
+        if (!AreUsableSeparators(fieldSeparator, encodingCharacters))
         {
             throw new InvalidMessageException("MSH-1/MSH-2 do not declare usable separators");
         }
 
-        var segments = new List<Hl7Segment>(lines.Count);
-        for (var i = 0; i < lines.Count; i++)
+        var segments = new List<Hl7Segment>();
+        for (int i = 0; i < lines.Count; i++)
         {
-            if (!HasSegmentName(lines[i], fieldSeparator))
+            if (!StartsWithSegmentName(lines[i], fieldSeparator))
             {
                 throw new InvalidMessageException($"line {i + 1} of the message is not a valid segment");
             }
@@ -62,13 +53,72 @@ internal sealed class Hl7Message
         return new Hl7Message(fieldSeparator, encodingCharacters, segments);
     }
 
-    private static bool IsSeparator(char c) => char.IsPunctuation(c) || char.IsSymbol(c);
+    // MSH-2 runs from just after the field separator up to the next field separator.
+    private static string ReadEncodingCharacters(string header, char fieldSeparator)
+    {
+        int end = header.IndexOf(fieldSeparator, 4);
+        if (end < 0)
+        {
+            return header.Substring(4);
+        }
 
-    // Three characters, uppercase letter first, then the field separator or the end of the line.
-    private static bool HasSegmentName(string line, char fieldSeparator) =>
-        line.Length >= 3
-        && char.IsAsciiLetterUpper(line[0])
-        && (char.IsAsciiLetterUpper(line[1]) || char.IsAsciiDigit(line[1]))
-        && (char.IsAsciiLetterUpper(line[2]) || char.IsAsciiDigit(line[2]))
-        && (line.Length == 3 || line[3] == fieldSeparator);
+        return header.Substring(4, end - 4);
+    }
+
+    // HL7 v2.5 declares four encoding characters (v2.7 adds a fifth). They must all be punctuation,
+    // all different and different from the field separator, otherwise splitting would be ambiguous.
+    private static bool AreUsableSeparators(char fieldSeparator, string encodingCharacters)
+    {
+        if (!IsSeparator(fieldSeparator))
+        {
+            return false;
+        }
+
+        if (encodingCharacters.Length != 4 && encodingCharacters.Length != 5)
+        {
+            return false;
+        }
+
+        if (encodingCharacters.Contains(fieldSeparator) || encodingCharacters.Distinct().Count() != encodingCharacters.Length)
+        {
+            return false;
+        }
+
+        foreach (char c in encodingCharacters)
+        {
+            if (!IsSeparator(c))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsSeparator(char c)
+    {
+        return char.IsPunctuation(c) || char.IsSymbol(c);
+    }
+
+    // A segment starts with a three-character name (uppercase letter, then uppercase letters or digits),
+    // followed by the field separator or by the end of the line.
+    private static bool StartsWithSegmentName(string line, char fieldSeparator)
+    {
+        if (line.Length < 3)
+        {
+            return false;
+        }
+
+        if (!char.IsAsciiLetterUpper(line[0]) || !IsUpperOrDigit(line[1]) || !IsUpperOrDigit(line[2]))
+        {
+            return false;
+        }
+
+        return line.Length == 3 || line[3] == fieldSeparator;
+    }
+
+    private static bool IsUpperOrDigit(char c)
+    {
+        return char.IsAsciiLetterUpper(c) || char.IsAsciiDigit(c);
+    }
 }

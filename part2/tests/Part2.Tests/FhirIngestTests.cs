@@ -59,7 +59,7 @@ public class FhirIngestTests
     }
 
     [Fact]
-    public void Invalid_encounter_goes_to_the_dlq_as_a_replayable_bundle_and_the_rest_continue()
+    public void Invalid_encounter_goes_to_the_dlq_as_its_own_json_and_the_rest_continue()
     {
         var broken = Fixtures.Read("fhir_bundle.json").Replace("\"start\": \"2026-03-14T10:00:00+01:00\"", "\"start\": \"not-a-date\"");
 
@@ -68,9 +68,11 @@ public class FhirIngestTests
         var deadLetter = Assert.Single(result.DeadLetters);
         Assert.Equal("Encounter.period.start is not a valid datetime", deadLetter.Reason);
         Assert.Equal(4, result.Events.Count);
-        // The dead letter is itself a bundle with the patient, the encounter and its linked resources.
-        var replayed = FhirBundleMapper.Map(deadLetter.Raw.Replace("not-a-date", "2026-03-14T10:00:00+01:00"), "replay.json");
-        Assert.Equal(Encounter("enc-013-1").ContentHash, Assert.Single(replayed.Events).ContentHash);
+        // The dead letter is the Encounter's JSON exactly as it is in the bundle.
+        using var json = System.Text.Json.JsonDocument.Parse(deadLetter.Raw);
+        Assert.Equal("Encounter", json.RootElement.GetProperty("resourceType").GetString());
+        Assert.Equal("enc-013-1", json.RootElement.GetProperty("id").GetString());
+        Assert.Contains("not-a-date", deadLetter.Raw);
     }
 
     [Fact]

@@ -178,8 +178,11 @@ openEHR slots in as one more component on either side of the same boundary. Noth
   - alerts on DLQ or quarantine rate per tenant and on feed silence.
 
 **DLQ replay with dedup.** Most of it is already in place:
-- Each DLQ entry is the raw unit (`.hl7`, or a small FHIR Bundle) plus a `.reason.txt`. A fixed entry can
-  be fed back through the ingestor as is.
+- Each DLQ entry is the raw unit plus a `.reason.txt`.
+  - An HL7 entry is the whole message: once fixed, it can go back through the ingestor as is.
+  - A FHIR entry is the rejected Encounter's JSON as it was in the bundle; its Patient and linked
+    resources are still in the input file. To replay it, fix the bundle and ingest it again: the
+    Encounters already loaded are skipped by dedup.
 - The writer's `etl_event` dedups the result:
   - an unchanged replay is skipped;
   - a changed one with the same id is flagged as a conflict instead of overwriting;

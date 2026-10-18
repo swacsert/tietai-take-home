@@ -8,26 +8,29 @@ namespace Part2.Ingest.Fhir;
 
 /// <summary>
 /// Turns a FHIR R4 Bundle into one canonical event per Encounter, with its Patient and the resources
-/// that reference it. Resources that hang from no Encounter are counted, never dropped silently.
+/// that reference it. Resources that hang from no Encounter are counted, never dropped silently. (D19)
 /// DLQ reasons name the element, never its value (see Hl7EventMapper).
 /// </summary>
 internal static class FhirBundleMapper
 {
-    private static readonly JsonWriterOptions MinifiedJson = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    private static readonly JsonWriterOptions MinifiedJson =
+        new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
+    /// <summary>One bundle entry: its position in the bundle (from 1), the resource, its type and its id.</summary>
     private sealed record Entry(int Position, JsonElement Resource, string Type, string? Id);
 
     public static IngestResult Map(string json, string fileName)
     {
         try
         {
-            using var document = JsonDocument.Parse(json);
-            return MapBundle(document.RootElement, fileName);
+            using (JsonDocument document = JsonDocument.Parse(json))
+            {
+                return MapBundle(document.RootElement, fileName);
+            }
         }
-        // The bundle as a whole is unusable: the full file goes to the DLQ as position 0.
         catch (JsonException ex)
         {
-            // JsonException's own message can quote the input, so only its position is kept.
+            // The file is not JSON. JsonException's own message can quote the input, so only the position is kept.
             return WholeFileDeadLetter(json, $"bundle rejected: not valid JSON (line {ex.LineNumber + 1}, byte {ex.BytePositionInLine})");
         }
         catch (InvalidMessageException ex)
@@ -36,243 +39,505 @@ internal static class FhirBundleMapper
         }
     }
 
-    private static IngestResult WholeFileDeadLetter(string json, string reason) =>
-        new([], [new DeadLetter(0, json, reason)], new Dictionary<string, int>());
-
     private static IngestResult MapBundle(JsonElement bundle, string fileName)
+    {
+        // Step 1: read the bundle header and index its entries.
+        CheckIsBundle(bundle);
+        string bundleId = ReadBundleId(bundle);
+        DateTime sentAt = ReadBundleTimestamp(bundle);
+        List<Entry> entries = ReadEntries(bundle);
+        Dictionary<string, Entry> patients = IndexPatients(entries);
+        List<Entry> encounters = entries.Where(e => e.Type == "Encounter").ToList();
+
+        // Step 2: group the other resources by the Encounter they reference.
+        Dictionary<string, List<Entry>> linkedByEncounter = GroupByEncounter(entries, encounters);
+
+        // Step 3: map each Encounter to one event. A bad Encounter goes to the DLQ and the rest go on.
+        var events = new List<CanonicalEvent>();
+        var deadLetters = new List<DeadLetter>();
+        foreach (Entry encounter in encounters)
+        {
+            List<Entry> linked = LinkedTo(encounter, linkedByEncounter);
+            try
+            {
+                events.Add(MapEncounter(bundleId, sentAt, fileName, encounter, patients, linked));
+            }
+            catch (InvalidMessageException ex)
+            {
+                // The Encounter's JSON as it is in the bundle. Its Patient and linked resources stay in the input file.
+                deadLetters.Add(new DeadLetter(encounter.Position, encounter.Resource.GetRawText(), ex.Message));
+            }
+        }
+
+        // Step 4: count what hangs from no Encounter.
+        Dictionary<string, int> unlinked = CountUnlinked(entries, encounters, patients, linkedByEncounter);
+        return new IngestResult(events, deadLetters, unlinked);
+    }
+
+    private static void CheckIsBundle(JsonElement bundle)
     {
         if (Text(bundle, "resourceType") != "Bundle")
         {
             throw new InvalidMessageException("root resourceType is not Bundle");
         }
+    }
 
-        var bundleId = Text(bundle, "id") ?? throw new InvalidMessageException("Bundle.id is missing");
-        var sentAt = ParseDateTime(Text(bundle, "timestamp"), "Bundle.timestamp")
-            ?? throw new InvalidMessageException("Bundle.timestamp is missing");
+    private static string ReadBundleId(JsonElement bundle)
+    {
+        string? bundleId = Text(bundle, "id");
+        if (bundleId == null)
+        {
+            throw new InvalidMessageException("Bundle.id is missing");
+        }
 
-        var entries = bundle.TryGetProperty("entry", out var entryArray) && entryArray.ValueKind == JsonValueKind.Array
-            ? entryArray.EnumerateArray()
-                .Select((entry, index) => entry.TryGetProperty("resource", out var resource)
-                    ? new Entry(index + 1, resource, Text(resource, "resourceType") ?? "(no resourceType)", Text(resource, "id"))
-                    : new Entry(index + 1, entry, "(entry without resource)", null))
-                .ToList()
-            : throw new InvalidMessageException("Bundle.entry is missing");
+        return bundleId;
+    }
 
+    private static DateTime ReadBundleTimestamp(JsonElement bundle)
+    {
+        DateTime? timestamp = ParseDateTime(Text(bundle, "timestamp"), "Bundle.timestamp");
+        if (timestamp == null)
+        {
+            throw new InvalidMessageException("Bundle.timestamp is missing");
+        }
+
+        return timestamp.Value;
+    }
+
+    private static List<Entry> ReadEntries(JsonElement bundle)
+    {
+        if (!bundle.TryGetProperty("entry", out JsonElement entryArray) || entryArray.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidMessageException("Bundle.entry is missing");
+        }
+
+        var entries = new List<Entry>();
+        int position = 0;
+        foreach (JsonElement entry in entryArray.EnumerateArray())
+        {
+            position++;
+            if (entry.TryGetProperty("resource", out JsonElement resource))
+            {
+                string type = Text(resource, "resourceType") ?? "(no resourceType)";
+                entries.Add(new Entry(position, resource, type, Text(resource, "id")));
+            }
+            else
+            {
+                entries.Add(new Entry(position, entry, "(entry without resource)", null));
+            }
+        }
+
+        return entries;
+    }
+
+    private static Dictionary<string, Entry> IndexPatients(List<Entry> entries)
+    {
         var patients = new Dictionary<string, Entry>();
-        foreach (var patient in entries.Where(e => e.Type == "Patient" && e.Id is not null))
+        foreach (Entry entry in entries)
         {
-            if (!patients.TryAdd(patient.Id!, patient))
+            if (entry.Type != "Patient" || entry.Id == null)
             {
-                throw new InvalidMessageException($"a Patient id appears twice (entry {patient.Position})");
+                continue;
+            }
+
+            if (!patients.TryAdd(entry.Id, entry))
+            {
+                throw new InvalidMessageException($"a Patient id appears twice (entry {entry.Position})");
             }
         }
 
-        var encounters = entries.Where(e => e.Type == "Encounter").ToList();
-        var encounterIds = encounters.Where(e => e.Id is not null).Select(e => e.Id!).ToHashSet();
-        var linked = entries
-            .Where(e => e.Type is not ("Patient" or "Encounter"))
-            .Select(e => (Entry: e, EncounterId: ReferencedId(e.Resource, "Encounter", "encounter", "context")))
-            .ToList();
-        var linkedByEncounter = linked
-            .Where(l => l.EncounterId is not null && encounterIds.Contains(l.EncounterId))
-            .ToLookup(l => l.EncounterId!, l => l.Entry);
+        return patients;
+    }
 
-        var events = new List<CanonicalEvent>();
-        var deadLetters = new List<DeadLetter>();
-        foreach (var encounter in encounters)
+    // Every resource that is not a Patient or an Encounter, filed under the Encounter it references
+    // ("encounter", or "context" in MedicationStatement). References to Encounters not in the bundle are left out.
+    private static Dictionary<string, List<Entry>> GroupByEncounter(List<Entry> entries, List<Entry> encounters)
+    {
+        var groups = new Dictionary<string, List<Entry>>();
+        foreach (Entry encounter in encounters)
         {
-            var group = linkedByEncounter[encounter.Id ?? ""].ToList();
-            try
+            if (encounter.Id != null)
             {
-                events.Add(MapEncounter(bundleId, sentAt, fileName, encounter, patients, group));
-            }
-            catch (InvalidMessageException ex)
-            {
-                deadLetters.Add(new DeadLetter(encounter.Position, GroupAsBundle(bundle, encounter, patients, group), ex.Message));
+                groups[encounter.Id] = new List<Entry>();
             }
         }
 
-        // Counted, not dropped: resources linked to no known Encounter, and Patients no Encounter uses.
-        var referencedPatients = encounters
-            .Select(e => ReferencedId(e.Resource, "Patient", "subject"))
-            .ToHashSet();
-        var unlinked = linked
-            .Where(l => l.EncounterId is null || !encounterIds.Contains(l.EncounterId))
-            .Select(l => l.Entry.Type)
-            .Concat(patients.Keys.Where(id => !referencedPatients.Contains(id)).Select(_ => "Patient"))
-            .CountBy(type => type)
-            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        foreach (Entry entry in entries)
+        {
+            if (IsPatientOrEncounter(entry))
+            {
+                continue;
+            }
 
-        return new IngestResult(events, deadLetters, unlinked);
+            string? encounterId = ReferencedId(entry.Resource, "Encounter", "encounter", "context");
+            if (encounterId != null && groups.TryGetValue(encounterId, out List<Entry>? group))
+            {
+                group.Add(entry);
+            }
+        }
+
+        return groups;
+    }
+
+    private static List<Entry> LinkedTo(Entry encounter, Dictionary<string, List<Entry>> linkedByEncounter)
+    {
+        if (encounter.Id != null && linkedByEncounter.TryGetValue(encounter.Id, out List<Entry>? linked))
+        {
+            return linked;
+        }
+
+        return new List<Entry>();
+    }
+
+    // Counts, by resource type, the resources linked to no Encounter in the bundle and the Patients
+    // that no Encounter uses.
+    private static Dictionary<string, int> CountUnlinked(
+        List<Entry> entries, List<Entry> encounters, Dictionary<string, Entry> patients, Dictionary<string, List<Entry>> linkedByEncounter)
+    {
+        var counts = new Dictionary<string, int>();
+        foreach (Entry entry in entries)
+        {
+            if (IsPatientOrEncounter(entry))
+            {
+                continue;
+            }
+
+            string? encounterId = ReferencedId(entry.Resource, "Encounter", "encounter", "context");
+            if (encounterId == null || !linkedByEncounter.ContainsKey(encounterId))
+            {
+                Increment(counts, entry.Type);
+            }
+        }
+
+        var referencedPatients = new HashSet<string>();
+        foreach (Entry encounter in encounters)
+        {
+            string? patientId = ReferencedId(encounter.Resource, "Patient", "subject");
+            if (patientId != null)
+            {
+                referencedPatients.Add(patientId);
+            }
+        }
+
+        foreach (string patientId in patients.Keys)
+        {
+            if (!referencedPatients.Contains(patientId))
+            {
+                Increment(counts, "Patient");
+            }
+        }
+
+        return counts;
     }
 
     private static CanonicalEvent MapEncounter(
         string bundleId, DateTime sentAt, string fileName, Entry encounter, Dictionary<string, Entry> patients, List<Entry> linked)
     {
-        var encounterId = encounter.Id ?? throw new InvalidMessageException("Encounter without id");
-        var patientId = ReferencedId(encounter.Resource, "Patient", "subject")
-            ?? throw new InvalidMessageException("Encounter.subject does not reference a Patient");
-        var patient = patients.GetValueOrDefault(patientId)
-            ?? throw new InvalidMessageException("the Patient in Encounter.subject is not in the bundle");
+        if (encounter.Id == null)
+        {
+            throw new InvalidMessageException("Encounter without id");
+        }
 
-        var conditions = linked.Where(e => e.Type == "Condition").ToList();
-        var unmapped = linked
-            .Where(e => e.Type != "Condition")
-            .Select(e => new UnmappedItem(UnmappedKind.FhirResource, e.Type, Minify(e.Resource)))
-            .ToList();
-        IEnumerable<Entry> hashed = [patient, encounter, .. linked];
+        Entry patient = FindPatient(encounter, patients);
+
+        var conditions = new List<Entry>();
+        var unmapped = new List<UnmappedItem>();
+        foreach (Entry entry in linked)
+        {
+            if (entry.Type == "Condition")
+            {
+                conditions.Add(entry);
+            }
+            else
+            {
+                unmapped.Add(new UnmappedItem(UnmappedKind.FhirResource, entry.Type, Minify(entry.Resource)));
+            }
+        }
+
+        string contentHash = ContentHash(patient, encounter, linked);
+        var source = new SourceInfo(SourceFormat.FhirR4, fileName, encounter.Position, encounter.Id, "Encounter", sentAt, null, null);
+        PatientInfo patientInfo = MapPatient(patient.Resource);
+        VisitInfo visit = MapVisit(encounter.Id, encounter.Resource);
+        List<Diagnosis> diagnoses = conditions.Select(c => MapCondition(c.Resource)).ToList();
 
         return new CanonicalEvent(
             CanonicalEvent.CurrentSchemaVersion,
-            $"fhir:{bundleId}:Encounter/{encounterId}",
-            Normalization.Sha256Hex(string.Join('\n', hashed.Select(e => Minify(e.Resource)))),
-            new SourceInfo(SourceFormat.FhirR4, fileName, encounter.Position, encounterId, "Encounter", sentAt, null, null),
-            MapPatient(patient.Resource),
-            MapVisit(encounterId, encounter.Resource),
-            conditions.Select(c => MapCondition(c.Resource)).ToList(),
+            $"fhir:{bundleId}:Encounter/{encounter.Id}",
+            contentHash,
+            source,
+            patientInfo,
+            visit,
+            diagnoses,
             unmapped,
-            []);
+            new List<QualityWarning>());
+    }
+
+    private static Entry FindPatient(Entry encounter, Dictionary<string, Entry> patients)
+    {
+        string? patientId = ReferencedId(encounter.Resource, "Patient", "subject");
+        if (patientId == null)
+        {
+            throw new InvalidMessageException("Encounter.subject does not reference a Patient");
+        }
+
+        if (!patients.TryGetValue(patientId, out Entry? patient))
+        {
+            throw new InvalidMessageException("the Patient in Encounter.subject is not in the bundle");
+        }
+
+        return patient;
+    }
+
+    // The Patient first, then the Encounter, then the linked resources in bundle order, each as minified
+    // JSON and joined with \n. (D17)
+    private static string ContentHash(Entry patient, Entry encounter, List<Entry> linked)
+    {
+        var parts = new List<string>();
+        parts.Add(Minify(patient.Resource));
+        parts.Add(Minify(encounter.Resource));
+        foreach (Entry entry in linked)
+        {
+            parts.Add(Minify(entry.Resource));
+        }
+
+        return Normalization.Sha256Hex(string.Join('\n', parts));
     }
 
     private static PatientInfo MapPatient(JsonElement patient)
     {
-        var identifier = First(patient, "identifier");
-        var gender = Text(patient, "gender");
-        var birthDate = Text(patient, "birthDate");
-        return new PatientInfo(
-            Text(identifier, "value") ?? throw new InvalidMessageException("Patient.identifier.value is missing"),
-            Text(identifier, "system") ?? throw new InvalidMessageException("Patient.identifier.system is missing"),
-            birthDate is null ? null
-                : DateOnly.TryParseExact(birthDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) ? parsed
-                : throw new InvalidMessageException("Patient.birthDate is not a full date"),
-            gender switch
-            {
-                null => null,
-                "female" => Sex.Female,
-                "male" => Sex.Male,
-                "other" => Sex.Other,
-                _ => Sex.Unknown,
-            },
-            gender);
+        JsonElement identifier = First(patient, "identifier");
+        string? gender = Text(patient, "gender");
+        string? birthDateText = Text(patient, "birthDate");
+
+        string? patientId = Text(identifier, "value");
+        if (patientId == null)
+        {
+            throw new InvalidMessageException("Patient.identifier.value is missing");
+        }
+
+        string? issuer = Text(identifier, "system");
+        if (issuer == null)
+        {
+            throw new InvalidMessageException("Patient.identifier.system is missing");
+        }
+
+        return new PatientInfo(patientId, issuer, ParseBirthDate(birthDateText), MapGender(gender), gender);
+    }
+
+    // A missing birth date stays null (D13). A partial one ("1980") cannot fill OMOP's day and month, so it is rejected.
+    private static DateOnly? ParseBirthDate(string? text)
+    {
+        if (text == null)
+        {
+            return null;
+        }
+
+        if (DateOnly.TryParseExact(text, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateOnly parsed))
+        {
+            return parsed;
+        }
+
+        throw new InvalidMessageException("Patient.birthDate is not a full date");
+    }
+
+    // FHIR administrative-gender. A missing gender stays null; a value we do not know means "unknown".
+    private static Sex? MapGender(string? gender)
+    {
+        switch (gender)
+        {
+            case null:
+                return null;
+            case "female":
+                return Sex.Female;
+            case "male":
+                return Sex.Male;
+            case "other":
+                return Sex.Other;
+            default:
+                return Sex.Unknown;
+        }
     }
 
     private static VisitInfo MapVisit(string encounterId, JsonElement encounter)
     {
-        // R4: Encounter.class is a single Coding (v3 ActCode).
-        var classCode = (encounter.TryGetProperty("class", out var coding) ? Text(coding, "code") : null)
-            ?? throw new InvalidMessageException("Encounter.class.code is missing");
-        var visitClass = classCode switch
+        // In R4, Encounter.class is a single Coding (v3 ActCode).
+        string? classCode = null;
+        if (encounter.TryGetProperty("class", out JsonElement coding))
         {
-            "IMP" => VisitClass.Inpatient,
-            "AMB" => VisitClass.Outpatient,
-            "EMER" => VisitClass.Emergency,
-            _ => throw new InvalidMessageException("Encounter.class is not supported"),
-        };
-        var period = encounter.TryGetProperty("period", out var p) ? p : default;
-        return new VisitInfo(
-            encounterId,
-            visitClass,
-            classCode,
-            ParseDateTime(Text(period, "start"), "Encounter.period.start")
-                ?? throw new InvalidMessageException("Encounter.period.start is missing"),
-            ParseDateTime(Text(period, "end"), "Encounter.period.end"));
+            classCode = Text(coding, "code");
+        }
+
+        if (classCode == null)
+        {
+            throw new InvalidMessageException("Encounter.class.code is missing");
+        }
+
+        VisitClass visitClass = MapEncounterClass(classCode);
+
+        JsonElement period = default;
+        if (encounter.TryGetProperty("period", out JsonElement periodElement))
+        {
+            period = periodElement;
+        }
+
+        DateTime? start = ParseDateTime(Text(period, "start"), "Encounter.period.start");
+        if (start == null)
+        {
+            throw new InvalidMessageException("Encounter.period.start is missing");
+        }
+
+        DateTime? end = ParseDateTime(Text(period, "end"), "Encounter.period.end");
+        return new VisitInfo(encounterId, visitClass, classCode, start.Value, end);
     }
 
+    private static VisitClass MapEncounterClass(string classCode)
+    {
+        switch (classCode)
+        {
+            case "IMP":
+                return VisitClass.Inpatient;
+            case "AMB":
+                return VisitClass.Outpatient;
+            case "EMER":
+                return VisitClass.Emergency;
+            default:
+                throw new InvalidMessageException("Encounter.class is not supported");
+        }
+    }
+
+    // Only the first coding is read.
     private static Diagnosis MapCondition(JsonElement condition)
     {
-        var coding = condition.TryGetProperty("code", out var code) ? First(code, "coding") : default;
-        var system = Text(coding, "system") ?? throw new InvalidMessageException("Condition.code.coding.system is missing");
-        var onset = ParseDateTime(Text(condition, "onsetDateTime"), "Condition.onsetDateTime");
-        return new Diagnosis(
-            Text(coding, "code") ?? throw new InvalidMessageException("Condition.code.coding.code is missing"),
-            Normalization.CodeSystem(system),
-            system,
-            Text(coding, "display"),
-            onset is null ? null : DateOnly.FromDateTime(onset.Value));
+        JsonElement coding = default;
+        if (condition.TryGetProperty("code", out JsonElement code))
+        {
+            coding = First(code, "coding");
+        }
+
+        string? system = Text(coding, "system");
+        if (system == null)
+        {
+            throw new InvalidMessageException("Condition.code.coding.system is missing");
+        }
+
+        DateTime? onset = ParseDateTime(Text(condition, "onsetDateTime"), "Condition.onsetDateTime");
+
+        string? codeValue = Text(coding, "code");
+        if (codeValue == null)
+        {
+            throw new InvalidMessageException("Condition.code.coding.code is missing");
+        }
+
+        DateOnly? startDate = null;
+        if (onset != null)
+        {
+            startDate = DateOnly.FromDateTime(onset.Value);
+        }
+
+        return new Diagnosis(codeValue, Normalization.CodeSystem(system), system, Text(coding, "display"), startDate);
     }
 
-    /// <summary>The id in a reference like "Encounter/enc-1", looked up in the first property that has one.</summary>
+    // The id in a reference such as "Encounter/enc-1", from the first of the given properties that has one.
     private static string? ReferencedId(JsonElement resource, string type, params string[] properties)
     {
-        var prefix = type + "/";
-        foreach (var property in properties)
+        string prefix = type + "/";
+        foreach (string property in properties)
         {
-            if (resource.TryGetProperty(property, out var reference)
-                && Text(reference, "reference") is { } value
-                && value.StartsWith(prefix, StringComparison.Ordinal))
+            if (!resource.TryGetProperty(property, out JsonElement reference))
             {
-                return value[prefix.Length..];
+                continue;
+            }
+
+            string? value = Text(reference, "reference");
+            if (value != null && value.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return value.Substring(prefix.Length);
             }
         }
 
         return null;
     }
 
-    /// <summary>FHIR datetimes carry an offset; the canonical event keeps the local wall time it describes.</summary>
-    private static DateTime? ParseDateTime(string? value, string location) =>
-        value is null ? null
-        : DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) ? parsed.DateTime
-        : throw new InvalidMessageException($"{location} is not a valid datetime");
+    // FHIR datetimes carry an offset. The canonical event keeps the local wall time that the offset describes.
+    private static DateTime? ParseDateTime(string? value, string location)
+    {
+        if (value == null)
+        {
+            return null;
+        }
 
-    private static string? Text(JsonElement element, string property) =>
-        element.ValueKind == JsonValueKind.Object
-        && element.TryGetProperty(property, out var value)
-        && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
+        if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTimeOffset parsed))
+        {
+            return parsed.DateTime;
+        }
 
-    private static JsonElement First(JsonElement element, string arrayProperty) =>
-        element.ValueKind == JsonValueKind.Object
-        && element.TryGetProperty(arrayProperty, out var array)
-        && array.ValueKind == JsonValueKind.Array
-        && array.GetArrayLength() > 0
-            ? array[0]
-            : default;
+        throw new InvalidMessageException($"{location} is not a valid datetime");
+    }
+
+    // The string value of a property, or null if the element is not an object or the property is not a string.
+    private static string? Text(JsonElement element, string property)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (!element.TryGetProperty(property, out JsonElement value) || value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return value.GetString();
+    }
+
+    // The first item of an array property, or an empty element (ValueKind Undefined) if there is none.
+    private static JsonElement First(JsonElement element, string arrayProperty)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return default;
+        }
+
+        if (!element.TryGetProperty(arrayProperty, out JsonElement array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return default;
+        }
+
+        if (array.GetArrayLength() == 0)
+        {
+            return default;
+        }
+
+        return array[0];
+    }
+
+    private static bool IsPatientOrEncounter(Entry entry)
+    {
+        return entry.Type == "Patient" || entry.Type == "Encounter";
+    }
+
+    private static void Increment(Dictionary<string, int> counts, string key)
+    {
+        counts.TryGetValue(key, out int current);
+        counts[key] = current + 1;
+    }
 
     private static string Minify(JsonElement element)
     {
-        using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer, MinifiedJson))
+        using (var buffer = new MemoryStream())
         {
-            element.WriteTo(writer);
-        }
-
-        return Encoding.UTF8.GetString(buffer.ToArray());
-    }
-
-    /// <summary>A rejected encounter group as a small Bundle of its own, so it can be fixed and replayed as is.</summary>
-    private static string GroupAsBundle(JsonElement bundle, Entry encounter, Dictionary<string, Entry> patients, List<Entry> linked)
-    {
-        var resources = new List<Entry>();
-        if (ReferencedId(encounter.Resource, "Patient", "subject") is { } patientId && patients.TryGetValue(patientId, out var patient))
-        {
-            resources.Add(patient);
-        }
-
-        resources.Add(encounter);
-        resources.AddRange(linked);
-
-        using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = MinifiedJson.Encoder, Indented = true }))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("resourceType", "Bundle");
-            writer.WriteString("id", Text(bundle, "id"));
-            writer.WriteString("type", "collection");
-            writer.WriteString("timestamp", Text(bundle, "timestamp"));
-            writer.WriteStartArray("entry");
-            foreach (var entry in resources)
+            using (var writer = new Utf8JsonWriter(buffer, MinifiedJson))
             {
-                writer.WriteStartObject();
-                writer.WritePropertyName("resource");
-                entry.Resource.WriteTo(writer);
-                writer.WriteEndObject();
+                element.WriteTo(writer);
             }
 
-            writer.WriteEndArray();
-            writer.WriteEndObject();
+            return Encoding.UTF8.GetString(buffer.ToArray());
         }
+    }
 
-        return Encoding.UTF8.GetString(buffer.ToArray());
+    private static IngestResult WholeFileDeadLetter(string json, string reason)
+    {
+        var deadLetters = new List<DeadLetter> { new DeadLetter(0, json, reason) };
+        return new IngestResult(new List<CanonicalEvent>(), deadLetters, new Dictionary<string, int>());
     }
 }
