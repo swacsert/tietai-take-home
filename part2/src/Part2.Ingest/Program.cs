@@ -49,7 +49,7 @@ foreach (var input in inputs)
     Console.WriteLine($"{fileName}: {result.Events.Count} events, {result.DeadLetters.Count} to DLQ");
     foreach (var deadLetter in result.DeadLetters)
     {
-        Console.WriteLine($"  DLQ #{deadLetter.Position}: {deadLetter.Reason}");
+        Console.WriteLine($"  DLQ {fileName} position {deadLetter.Position}: {deadLetter.Reason}");
     }
 
     foreach (var (type, count) in result.UnlinkedResources)

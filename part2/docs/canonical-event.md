@@ -84,7 +84,7 @@ How the hash is computed:
 | `patient.sex_source` | string? | `PID-8` | `Patient.gender` | Original value, for `gender_source_value` |
 | `visit` | object? | `PV1` | `Encounter` | `null` when there is no visit (`ORU` messages) |
 | `visit.source_id` | string | derived: `{PID-3.1}:{admit datetime as received}` | `Encounter.id` | See below |
-| `visit.class` | `inpatient` \| `outpatient` \| `emergency` | `PV1-2` (`I`, `O`, `E`) | `Encounter.class.code` (`IMP`, `AMB`, `EMER`) | |
+| `visit.class` | `inpatient` \| `outpatient` \| `emergency` | `PV1-2` (`I`, `O`, `E`); `emergency` also when `PV1-10` (hospital service) = `ER` | `Encounter.class.code` (`IMP`, `AMB`, `EMER`) | This HIS sends emergency visits as `PV1-2 = O` + `PV1-10 = ER`; `class_source` keeps `O` |
 | `visit.class_source` | string | `PV1-2` | `Encounter.class.code` | |
 | `visit.start` | datetime | admit datetime | `Encounter.period.start` | |
 | `visit.end` | datetime? | `PV1-45`; for an `A03` without it, `EVN-2` (with a warning) | `Encounter.period.end` | `null` if absent. The writer decides the OMOP fallback |

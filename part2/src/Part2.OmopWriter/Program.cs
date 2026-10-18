@@ -52,7 +52,11 @@ var report = loader.Load(lines);
 Console.WriteLine($"read {files.Count} file(s) into {databasePath}");
 Console.WriteLine($"  events loaded: {report.Loaded}, already loaded (rerun or retransmission): {report.AlreadyLoaded}");
 Console.WriteLine($"  quarantined events: {report.QuarantinedEvents}, conflicts: {report.Conflicts}, invalid lines: {report.InvalidLines}");
-Console.WriteLine($"  quarantined diagnoses: {report.QuarantinedDiagnoses}, superseded diagnosis sets: {report.SupersededDiagnosisSets}");
+foreach (var (domain, count) in report.OutOfScopeByDomain)
+{
+    Console.WriteLine($"  domain {domain}: table out of scope, {count} diagnosis(es) not loaded");
+}
+
 foreach (var table in OmopDatabase.Tables)
 {
     Console.WriteLine($"  {table}: {OmopDatabase.CountRows(connection, table)} rows");

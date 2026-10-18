@@ -30,7 +30,7 @@ internal static class OutputWriter
         {
             var baseName = Path.Combine(dlqDirectory, $"{stem}.{deadLetter.Position:D4}");
             File.WriteAllText(baseName + extension, deadLetter.Raw + "\n");
-            File.WriteAllText(baseName + ".reason.txt", deadLetter.Reason + "\n");
+            File.WriteAllText(baseName + ".reason.txt", $"{inputFileName} position {deadLetter.Position}: {deadLetter.Reason}\n");
         }
     }
 }

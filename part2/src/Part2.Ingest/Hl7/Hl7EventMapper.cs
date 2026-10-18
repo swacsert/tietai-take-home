@@ -3,7 +3,10 @@ using Part2.Canonical;
 
 namespace Part2.Ingest.Hl7;
 
-/// <summary>Maps one parsed HL7 message to a canonical event (contract: docs/canonical-event.md).</summary>
+/// <summary>
+/// Maps one parsed HL7 message to a canonical event (contract: docs/canonical-event.md).
+/// DLQ reasons name the field, never its value: the reason ends up in logs, the value may be patient data.
+/// </summary>
 internal static class Hl7EventMapper
 {
     // Segments read into typed fields. Every other segment (Z-segments included) goes whole to unmapped.
@@ -94,13 +97,14 @@ internal static class Hl7EventMapper
     private static VisitInfo MapVisit(
         Hl7Segment pv1, Hl7Segment? evn, string triggerEvent, string patientId, List<QualityWarning> warnings)
     {
+        // D29: this HIS sends emergency visits as PV1-2 = O with hospital service PV1-10 = ER.
         var classSource = pv1.Field(2);
-        var visitClass = classSource switch
+        var visitClass = (classSource, HospitalService: pv1.Component(10, 1)) switch
         {
-            "I" => VisitClass.Inpatient,
-            "O" => VisitClass.Outpatient,
-            "E" => VisitClass.Emergency,
-            _ => throw new InvalidMessageException($"PV1-2 patient class '{classSource}' is not supported"),
+            ("E", _) or (_, "ER") => VisitClass.Emergency,
+            ("I", _) => VisitClass.Inpatient,
+            ("O", _) => VisitClass.Outpatient,
+            _ => throw new InvalidMessageException("PV1-2 patient class is not supported"),
         };
 
         // PV1-44 is the standard place. This sender uses PV1-48 instead (decision D21).
@@ -188,10 +192,10 @@ internal static class Hl7EventMapper
     private static DateTime ParseTimestamp(string value, string location) =>
         DateTime.TryParseExact(value, TimestampFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
             ? parsed
-            : throw new InvalidMessageException($"{location} '{value}' is not a supported HL7 timestamp");
+            : throw new InvalidMessageException($"{location} is not a supported HL7 timestamp");
 
     private static DateOnly ParseDate(string value, string location) =>
         value.Length >= 8 && DateOnly.TryParseExact(value[..8], "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
             ? parsed
-            : throw new InvalidMessageException($"{location} '{value}' is not a supported HL7 date");
+            : throw new InvalidMessageException($"{location} is not a supported HL7 date");
 }

@@ -17,9 +17,10 @@ internal sealed class LoadReport
     public int AlreadyLoaded { get; set; }
     public int Conflicts { get; set; }
     public int QuarantinedEvents { get; set; }
-    public int QuarantinedDiagnoses { get; set; }
-    public int SupersededDiagnosisSets { get; set; }
     public int InvalidLines { get; set; }
+
+    /// <summary>Diagnoses not loaded because their concept's domain table is out of scope, by domain.</summary>
+    public Dictionary<string, int> OutOfScopeByDomain { get; } = [];
 }
 
 /// <summary>
@@ -36,7 +37,10 @@ internal sealed class OmopLoader(SqliteConnection connection, IConceptMapper con
     private const int EmergencyRoomVisitConceptId = 9203;
     private const int EhrTypeConceptId = 32817;
     private const int NoMatchingConceptId = 0;
-    private const string ConditionDomain = "Condition";
+
+    // D26: domains that belong in condition_occurrence. "Symptom" is not an OMOP domain; symptoms are
+    // Condition-domain concepts in OMOP, so the stub's "Symptom" rows load as conditions.
+    private static readonly HashSet<string> ConditionTableDomains = ["Condition", "Symptom"];
 
     private SqliteTransaction? _transaction;
 
@@ -55,13 +59,14 @@ internal sealed class OmopLoader(SqliteConnection connection, IConceptMapper con
             }
             catch (JsonException ex)
             {
-                Quarantine($"line:{line.File}:{line.Number}", Sha256Hex(line.Text), "event",
+                Quarantine($"line:{line.File}:{line.Number}", Sha256Hex(line.Text),
                     $"breaks the canonical contract: {ex.Message}", line.Text);
                 report.InvalidLines++;
             }
         }
 
-        // D23: by sent_at, so within a run the most recent message is applied last.
+        // D23: by sent_at, so the result does not depend on file order (the first event fixes a person's
+        // demographics and a condition's start date).
         var ordered = events
             .OrderBy(e => e.Source.SentAt)
             .ThenBy(e => e.Source.File, StringComparer.Ordinal)
@@ -88,7 +93,7 @@ internal sealed class OmopLoader(SqliteConnection connection, IConceptMapper con
 
         if (loadedHash is not null)
         {
-            Quarantine(e, "event", $"conflict: event_id already loaded with content_hash {loadedHash}; loaded data kept");
+            Quarantine(e, $"conflict: event_id already loaded with content_hash {loadedHash}; loaded data kept");
             report.Conflicts++;
             return;
         }
@@ -96,7 +101,7 @@ internal sealed class OmopLoader(SqliteConnection connection, IConceptMapper con
         // D13: OMOP requires year_of_birth, and a birth year is never invented.
         if (e.Patient.BirthDate is null)
         {
-            Quarantine(e, "event", "no birth date: OMOP person.year_of_birth is required");
+            Quarantine(e, "no birth date: OMOP person.year_of_birth is required");
             report.QuarantinedEvents++;
             return;
         }
@@ -105,7 +110,7 @@ internal sealed class OmopLoader(SqliteConnection connection, IConceptMapper con
         if (e.Visit is not null)
         {
             var visitId = UpsertVisit(personId, e.Source.Format, e.Visit);
-            ReplaceDiagnoses(personId, visitId, e, report);
+            AddDiagnoses(personId, visitId, e, report);
         }
 
         Execute("""
@@ -172,37 +177,19 @@ internal sealed class OmopLoader(SqliteConnection connection, IConceptMapper con
     }
 
     /// <summary>
-    /// D23: the diagnosis set of the most recent message replaces the previous one for the visit.
-    /// D27: an event without diagnoses leaves the visit's set as it is.
+    /// D23: diagnoses accumulate on the visit and are never deleted. A code already on the visit stays as
+    /// it is; a new code is added. Withdrawing a diagnosis is an open question for the customer (README).
     /// </summary>
-    private void ReplaceDiagnoses(long personId, long visitId, CanonicalEvent e, LoadReport report)
+    private void AddDiagnoses(long personId, long visitId, CanonicalEvent e, LoadReport report)
     {
-        if (e.Diagnoses.Count == 0)
-        {
-            return;
-        }
-
-        var sentAt = DateTimeText(e.Source.SentAt);
-        var appliedSentAt = (string?)Scalar(
-            "SELECT sent_at FROM etl_visit_diagnoses WHERE visit_occurrence_id = $visit", ("$visit", visitId));
-        if (appliedSentAt is not null && string.CompareOrdinal(appliedSentAt, sentAt) > 0)
-        {
-            // An older message arriving late (for example a DLQ replay) must not undo a newer one.
-            report.SupersededDiagnosisSets++;
-            return;
-        }
-
-        Execute("DELETE FROM condition_occurrence WHERE visit_occurrence_id = $visit", ("$visit", visitId));
         foreach (var diagnosis in e.Diagnoses)
         {
             var mapping = conceptMapper.Map(diagnosis.System, diagnosis.Code);
 
-            // D26: OMOP puts a record in the table of its concept's domain; only Condition is in scope.
-            if (mapping is not null && mapping.DomainId != ConditionDomain)
+            // D26: OMOP puts a record in the table of its concept's domain; other domain tables are out of scope.
+            if (mapping is not null && !ConditionTableDomains.Contains(mapping.DomainId))
             {
-                Quarantine(e, $"diagnosis:{diagnosis.Code}",
-                    $"maps to concept {mapping.ConceptId} in domain '{mapping.DomainId}'; only domain '{ConditionDomain}' is loaded");
-                report.QuarantinedDiagnoses++;
+                report.OutOfScopeByDomain[mapping.DomainId] = report.OutOfScopeByDomain.GetValueOrDefault(mapping.DomainId) + 1;
                 continue;
             }
 
@@ -212,29 +199,24 @@ internal sealed class OmopLoader(SqliteConnection connection, IConceptMapper con
                                                   condition_type_concept_id, visit_occurrence_id,
                                                   condition_source_value, condition_source_concept_id)
                 VALUES ($person, $concept, $startDate, $type, $visit, $source, 0)
+                ON CONFLICT (visit_occurrence_id, condition_source_value) DO NOTHING
                 """,
                 ("$person", personId), ("$concept", mapping?.ConceptId ?? NoMatchingConceptId),
                 ("$startDate", diagnosis.StartDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? DateText(e.Visit!.Start)),
                 ("$type", EhrTypeConceptId), ("$visit", visitId), ("$source", diagnosis.Code));
         }
-
-        Execute("""
-            INSERT INTO etl_visit_diagnoses (visit_occurrence_id, event_id, sent_at) VALUES ($visit, $id, $sentAt)
-            ON CONFLICT (visit_occurrence_id) DO UPDATE SET event_id = excluded.event_id, sent_at = excluded.sent_at
-            """,
-            ("$visit", visitId), ("$id", e.EventId), ("$sentAt", sentAt));
     }
 
-    private void Quarantine(CanonicalEvent e, string item, string reason) =>
-        Quarantine(e.EventId, e.ContentHash, item, reason, CanonicalJson.Serialize(e));
+    private void Quarantine(CanonicalEvent e, string reason) =>
+        Quarantine(e.EventId, e.ContentHash, reason, CanonicalJson.Serialize(e));
 
-    // INSERT OR IGNORE: quarantining the same thing twice (a rerun) leaves one row.
-    private void Quarantine(string eventId, string contentHash, string item, string reason, string line) =>
+    // INSERT OR IGNORE: quarantining the same event twice (a rerun) leaves one row.
+    private void Quarantine(string eventId, string contentHash, string reason, string line) =>
         Execute("""
-            INSERT OR IGNORE INTO etl_quarantine (event_id, content_hash, item, reason, line)
-            VALUES ($id, $hash, $item, $reason, $line)
+            INSERT OR IGNORE INTO etl_quarantine (event_id, content_hash, reason, line)
+            VALUES ($id, $hash, $reason, $line)
             """,
-            ("$id", eventId), ("$hash", contentHash), ("$item", item), ("$reason", reason), ("$line", line));
+            ("$id", eventId), ("$hash", contentHash), ("$reason", reason), ("$line", line));
 
     private int Execute(string sql, params (string Name, object? Value)[] parameters)
     {

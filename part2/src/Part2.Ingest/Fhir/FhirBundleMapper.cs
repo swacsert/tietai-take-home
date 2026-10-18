@@ -9,6 +9,7 @@ namespace Part2.Ingest.Fhir;
 /// <summary>
 /// Turns a FHIR R4 Bundle into one canonical event per Encounter, with its Patient and the resources
 /// that reference it. Resources that hang from no Encounter are counted, never dropped silently.
+/// DLQ reasons name the element, never its value (see Hl7EventMapper).
 /// </summary>
 internal static class FhirBundleMapper
 {
@@ -23,12 +24,20 @@ internal static class FhirBundleMapper
             using var document = JsonDocument.Parse(json);
             return MapBundle(document.RootElement, fileName);
         }
-        catch (Exception ex) when (ex is JsonException or InvalidMessageException)
+        // The bundle as a whole is unusable: the full file goes to the DLQ as position 0.
+        catch (JsonException ex)
         {
-            // The bundle as a whole is unusable: the full file goes to the DLQ as position 0.
-            return new IngestResult([], [new DeadLetter(0, json, $"bundle rejected: {ex.Message}")], new Dictionary<string, int>());
+            // JsonException's own message can quote the input, so only its position is kept.
+            return WholeFileDeadLetter(json, $"bundle rejected: not valid JSON (line {ex.LineNumber + 1}, byte {ex.BytePositionInLine})");
+        }
+        catch (InvalidMessageException ex)
+        {
+            return WholeFileDeadLetter(json, $"bundle rejected: {ex.Message}");
         }
     }
+
+    private static IngestResult WholeFileDeadLetter(string json, string reason) =>
+        new([], [new DeadLetter(0, json, reason)], new Dictionary<string, int>());
 
     private static IngestResult MapBundle(JsonElement bundle, string fileName)
     {
@@ -54,7 +63,7 @@ internal static class FhirBundleMapper
         {
             if (!patients.TryAdd(patient.Id!, patient))
             {
-                throw new InvalidMessageException($"Patient/{patient.Id} appears twice");
+                throw new InvalidMessageException($"a Patient id appears twice (entry {patient.Position})");
             }
         }
 
@@ -104,7 +113,7 @@ internal static class FhirBundleMapper
         var patientId = ReferencedId(encounter.Resource, "Patient", "subject")
             ?? throw new InvalidMessageException("Encounter.subject does not reference a Patient");
         var patient = patients.GetValueOrDefault(patientId)
-            ?? throw new InvalidMessageException($"Patient/{patientId} is not in the bundle");
+            ?? throw new InvalidMessageException("the Patient in Encounter.subject is not in the bundle");
 
         var conditions = linked.Where(e => e.Type == "Condition").ToList();
         var unmapped = linked
@@ -135,7 +144,7 @@ internal static class FhirBundleMapper
             Text(identifier, "system") ?? throw new InvalidMessageException("Patient.identifier.system is missing"),
             birthDate is null ? null
                 : DateOnly.TryParseExact(birthDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) ? parsed
-                : throw new InvalidMessageException($"Patient.birthDate '{birthDate}' is not a full date"),
+                : throw new InvalidMessageException("Patient.birthDate is not a full date"),
             gender switch
             {
                 null => null,
@@ -157,7 +166,7 @@ internal static class FhirBundleMapper
             "IMP" => VisitClass.Inpatient,
             "AMB" => VisitClass.Outpatient,
             "EMER" => VisitClass.Emergency,
-            _ => throw new InvalidMessageException($"Encounter.class '{classCode}' is not supported"),
+            _ => throw new InvalidMessageException("Encounter.class is not supported"),
         };
         var period = encounter.TryGetProperty("period", out var p) ? p : default;
         return new VisitInfo(
@@ -203,7 +212,7 @@ internal static class FhirBundleMapper
     private static DateTime? ParseDateTime(string? value, string location) =>
         value is null ? null
         : DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) ? parsed.DateTime
-        : throw new InvalidMessageException($"{location} '{value}' is not a valid datetime");
+        : throw new InvalidMessageException($"{location} is not a valid datetime");
 
     private static string? Text(JsonElement element, string property) =>
         element.ValueKind == JsonValueKind.Object

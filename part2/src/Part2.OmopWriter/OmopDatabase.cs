@@ -3,13 +3,13 @@ using Microsoft.Data.Sqlite;
 namespace Part2.OmopWriter;
 
 /// <summary>
-/// The SQLite file: three OMOP CDM 5.4 tables (all their columns, unused ones left NULL) plus three
+/// The SQLite file: three OMOP CDM 5.4 tables (all their columns, unused ones left NULL) plus two
 /// etl_* tables the loader needs for idempotency and quarantine. The etl_* tables are not OMOP.
 /// </summary>
 internal static class OmopDatabase
 {
     public static readonly string[] Tables =
-        ["person", "visit_occurrence", "condition_occurrence", "etl_event", "etl_visit_diagnoses", "etl_quarantine"];
+        ["person", "visit_occurrence", "condition_occurrence", "etl_event", "etl_quarantine"];
 
     private const string Schema = """
         CREATE TABLE IF NOT EXISTS person (
@@ -75,6 +75,8 @@ internal static class OmopDatabase
             condition_source_concept_id   INTEGER NULL,
             condition_status_source_value TEXT    NULL
         );
+        -- Diagnoses accumulate per visit (D23): one row per source code on a visit.
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_condition_visit_source ON condition_occurrence (visit_occurrence_id, condition_source_value);
 
         -- Every event loaded, with the hash that was loaded: tells a retransmission from a conflict.
         CREATE TABLE IF NOT EXISTS etl_event (
@@ -85,21 +87,13 @@ internal static class OmopDatabase
             source_position INTEGER NOT NULL
         );
 
-        -- Which message set the current diagnoses of each visit, so an older message never overwrites a newer one.
-        CREATE TABLE IF NOT EXISTS etl_visit_diagnoses (
-            visit_occurrence_id INTEGER PRIMARY KEY REFERENCES visit_occurrence (visit_occurrence_id),
-            event_id            TEXT    NOT NULL,
-            sent_at             TEXT    NOT NULL
-        );
-
-        -- Readable events (or parts of them) that cannot go into OMOP, with the reason and the line to replay.
+        -- Readable events that cannot go into OMOP, with the reason and the canonical line to replay.
         CREATE TABLE IF NOT EXISTS etl_quarantine (
             event_id     TEXT NOT NULL,
             content_hash TEXT NOT NULL,
-            item         TEXT NOT NULL,
             reason       TEXT NOT NULL,
             line         TEXT NOT NULL,
-            UNIQUE (event_id, content_hash, item)
+            UNIQUE (event_id, content_hash)
         );
         """;
 

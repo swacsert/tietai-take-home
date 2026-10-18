@@ -24,8 +24,10 @@ internal static class Hl7Feed
             }
             catch (Exception ex)
             {
-                // A bug triggered by one untrusted message must not stop the rest of the batch.
-                deadLetters.Add(new DeadLetter(position, string.Join('\n', lines), $"unexpected error: {ex.Message}"));
+                // Deliberately broad. The feed is untrusted: if one message hits a bug in this parser,
+                // that message goes to the DLQ and the other messages are still processed. The exception
+                // type in the reason points at the bug; its message is left out because it may quote the input.
+                deadLetters.Add(new DeadLetter(position, string.Join('\n', lines), $"unexpected error ({ex.GetType().Name})"));
             }
         }
 

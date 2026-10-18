@@ -103,6 +103,27 @@ public class Hl7IngestTests
     }
 
     [Fact]
+    public void Dlq_reasons_name_the_field_but_never_quote_its_value()
+    {
+        // A malformed birth date: the reason may say "PID-7", never the value (it is patient data).
+        var text = Fixtures.Read("adt_feed.hl7").Replace("||19580712|F|", "||1958-07-12|F|");
+
+        var reasons = Hl7Feed.Ingest(text, "adt_feed.hl7").DeadLetters.Select(d => d.Reason).ToList();
+
+        Assert.Contains("PID-7 is not a supported HL7 date", reasons);
+        Assert.DoesNotContain(reasons, r => r.Contains("1958") || r.Contains("GARBLED"));
+    }
+
+    [Fact]
+    public void Emergency_visit_is_recognised_by_hospital_service_er()
+    {
+        var emergency = Message("ADT00002").Visit!;
+
+        Assert.Equal(VisitClass.Emergency, emergency.Class); // PV1-10 = ER
+        Assert.Equal("O", emergency.ClassSource);             // PV1-2 is still kept as received
+    }
+
+    [Fact]
     public void Missing_birth_date_is_null_not_invented()
     {
         Assert.Null(Message("ADT00009").Patient.BirthDate);

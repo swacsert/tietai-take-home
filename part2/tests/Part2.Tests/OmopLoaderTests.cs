@@ -58,7 +58,7 @@ public sealed class OmopLoaderTests : IDisposable
         // Expected for the sample data; see the README for the reasoning behind each number.
         Assert.Equal(12, countsAfterFirstRun["person"]);
         Assert.Equal(16, countsAfterFirstRun["visit_occurrence"]);
-        Assert.Equal(15, countsAfterFirstRun["condition_occurrence"]);
+        Assert.Equal(18, countsAfterFirstRun["condition_occurrence"]);
     }
 
     [Fact]
@@ -103,39 +103,43 @@ public sealed class OmopLoaderTests : IDisposable
         Assert.Empty(Query("SELECT 1 FROM person WHERE person_source_value LIKE 'urn:oid:%'"));
     }
 
+    private List<string> DiagnosesOfVisit(string visitSourceValue) => Query($"""
+        SELECT c.condition_source_value FROM condition_occurrence c
+        JOIN visit_occurrence v ON v.visit_occurrence_id = c.visit_occurrence_id
+        WHERE v.visit_source_value = '{visitSourceValue}' ORDER BY c.condition_source_value
+        """);
+
     [Fact]
-    public void A08_replaces_the_diagnoses_of_the_visit()
+    public void A08_adds_a_diagnosis_and_keeps_the_earlier_one()
     {
         Load(AllEvents);
 
-        // ADT00002 sent R07.9 for this ER visit; the later ADT00015 (A08) sent I21.4.
-        Assert.Equal(["I21.4"], Query("""
-            SELECT c.condition_source_value FROM condition_occurrence c
-            JOIN visit_occurrence v ON v.visit_occurrence_id = c.visit_occurrence_id
-            WHERE v.visit_source_value = 'hl7:100023456:20260315083200'
-            """));
+        // ADT00002 sent R07.9 for this ER visit; the later ADT00015 (A08) sent I21.4. Both stay (D23).
+        Assert.Equal(["I21.4", "R07.9"], DiagnosesOfVisit("hl7:100023456:20260315083200"));
     }
 
     [Fact]
-    public void An_older_message_arriving_late_does_not_undo_a_newer_diagnosis_set()
+    public void A_later_message_with_fewer_diagnoses_deletes_nothing()
     {
         Load(AllEvents);
-        var original = AllEvents.Single(e => e.Source.RecordId == "ADT00002");
-        var lateReplay = original with
-        {
-            EventId = original.EventId + "-replayed",
-            ContentHash = "late",
-            Diagnoses = [original.Diagnoses[0] with { Code = "R07.89" }],
-        };
 
-        var report = Load([lateReplay]);
+        // GARCIA: A01 sent I50.9, the A08 added E11.9, the A03 re-sent only I50.9. E11.9 must survive,
+        // and I50.9, sent three times, is one row.
+        Assert.Equal(["E11.9", "I50.9"], DiagnosesOfVisit("hl7:100012345:20260315080500"));
+    }
 
-        Assert.Equal(1, report.SupersededDiagnosisSets);
-        Assert.Equal(["I21.4"], Query("""
-            SELECT c.condition_source_value FROM condition_occurrence c
-            JOIN visit_occurrence v ON v.visit_occurrence_id = c.visit_occurrence_id
-            WHERE v.visit_source_value = 'hl7:100023456:20260315083200'
-            """));
+    [Fact]
+    public void Emergency_visits_get_9203_inpatient_9201_and_outpatient_9202()
+    {
+        Load(AllEvents);
+
+        Assert.Equal(
+            ["fhir:enc-003-1|9202", "hl7:100012345:20260315080500|9201", "hl7:100023456:20260315083200|9203"],
+            Query("""
+                SELECT visit_source_value, visit_concept_id FROM visit_occurrence
+                WHERE visit_source_value IN ('fhir:enc-003-1', 'hl7:100012345:20260315080500', 'hl7:100023456:20260315083200')
+                ORDER BY visit_source_value
+                """));
     }
 
     [Fact]
@@ -167,12 +171,16 @@ public sealed class OmopLoaderTests : IDisposable
     }
 
     [Fact]
-    public void Diagnosis_whose_concept_is_not_in_the_condition_domain_is_quarantined()
+    public void Observation_domain_is_counted_as_out_of_scope_and_symptom_loads_as_condition()
     {
-        Load(AllEvents);
+        var report = Load(AllEvents);
 
+        // O80 maps to an Observation-domain concept: not loaded, not quarantined, counted.
         Assert.Empty(Query("SELECT 1 FROM condition_occurrence WHERE condition_source_value = 'O80'"));
-        Assert.Contains("domain 'Observation'", Assert.Single(Query("SELECT reason FROM etl_quarantine WHERE item = 'diagnosis:O80'")));
+        Assert.Equal(1, report.OutOfScopeByDomain["Observation"]);
+        Assert.Equal(["1"], Query("SELECT COUNT(*) FROM etl_quarantine"));    // only ADT00009
+        // R07.9 maps to "Symptom" in the stub: loaded as a condition with its concept (D26).
+        Assert.Equal(["77670", "77670"], Query("SELECT condition_concept_id FROM condition_occurrence WHERE condition_source_value = 'R07.9'"));
     }
 
     [Fact]

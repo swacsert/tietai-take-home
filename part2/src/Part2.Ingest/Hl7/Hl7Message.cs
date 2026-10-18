@@ -29,7 +29,7 @@ internal sealed class Hl7Message
         var header = lines[0];
         if (!header.StartsWith("MSH", StringComparison.Ordinal) || header.Length < 8)
         {
-            throw new InvalidMessageException($"first segment is not MSH: '{Shorten(header)}'");
+            throw new InvalidMessageException("first segment is not MSH");
         }
 
         var fieldSeparator = header[3];
@@ -45,8 +45,7 @@ internal sealed class Hl7Message
             && !encodingCharacters.Contains(fieldSeparator);
         if (!usable)
         {
-            throw new InvalidMessageException(
-                $"MSH-1/MSH-2 do not declare usable separators: '{fieldSeparator}{encodingCharacters}'");
+            throw new InvalidMessageException("MSH-1/MSH-2 do not declare usable separators");
         }
 
         var segments = new List<Hl7Segment>(lines.Count);
@@ -54,7 +53,7 @@ internal sealed class Hl7Message
         {
             if (!HasSegmentName(lines[i], fieldSeparator))
             {
-                throw new InvalidMessageException($"line {i + 1} of the message is not a segment: '{Shorten(lines[i])}'");
+                throw new InvalidMessageException($"line {i + 1} of the message is not a valid segment");
             }
 
             segments.Add(new Hl7Segment(lines[i], fieldSeparator, encodingCharacters[0], encodingCharacters[1]));
@@ -72,6 +71,4 @@ internal sealed class Hl7Message
         && (char.IsAsciiLetterUpper(line[1]) || char.IsAsciiDigit(line[1]))
         && (char.IsAsciiLetterUpper(line[2]) || char.IsAsciiDigit(line[2]))
         && (line.Length == 3 || line[3] == fieldSeparator);
-
-    private static string Shorten(string text) => text.Length <= 40 ? text : text[..40] + "…";
 }

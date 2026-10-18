@@ -66,7 +66,7 @@ public class FhirIngestTests
         var result = FhirBundleMapper.Map(broken, "fhir_bundle.json");
 
         var deadLetter = Assert.Single(result.DeadLetters);
-        Assert.Contains("Encounter.period.start 'not-a-date'", deadLetter.Reason);
+        Assert.Equal("Encounter.period.start is not a valid datetime", deadLetter.Reason);
         Assert.Equal(4, result.Events.Count);
         // The dead letter is itself a bundle with the patient, the encounter and its linked resources.
         var replayed = FhirBundleMapper.Map(deadLetter.Raw.Replace("not-a-date", "2026-03-14T10:00:00+01:00"), "replay.json");
