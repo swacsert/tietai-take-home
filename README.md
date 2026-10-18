@@ -43,15 +43,14 @@ I used AI the way I would on the job, and kept a log of what I rejected or corre
 - [`part2/AI_LOG.md`](part2/AI_LOG.md): AI proposals I rejected or corrected, and why. For example: a diagnosis-replacement rule that silently deleted a real diagnosis, a wrong data finding about a duplicated `MSH-10`, and DLQ reasons that leaked patient data into logs.
 
 **What I double-checked myself:**
-- [ ] *(TODO Alonso: tick only what you actually checked.)* The separators are read from `MSH`: ran the parser on `ADT00010` (`#` and `@`).
-- [ ] Rerunning the OMOP writer twice leaves the same row counts.
-- [ ] Every data decision against the sample files (e.g. `ADT00013` is a resend, the admit time sits in `PV1-48`, the A03 has no `PV1-45`).
-- [ ] Each test asserts something real.
-- [ ] The standard concept ids used for gender and visit type (8507, 8532, 9201, 9202, 9203).
+- That HL7 allows a message to declare its own separators in `MSH-1`/`MSH-2` (vendor HL7 references), so `ADT00010` (`#` and `@`) is a valid message to parse, not one to dead-letter.
+- Every data finding against the sample files themselves: `ADT00013` is a resend of the same visit, the admit time sits in `PV1-48`, the A03 has no `PV1-45`, and `ADT00010` contradicts its own separators only in `MSH-9`.
+- The loader rules against the data: this caught a rule that deleted a real diagnosis (the A03 of `ADT00011` drops the `E11.9` added by the A08), and an `event_id` design that would not have detected the `ADT00013` resend.
+- The end-to-end run: `ADT00010` loads with its patient, visit and `J44.1`; `GARBLED` lands in `out/dlq/` with its reason; running the writer a second time leaves the same row counts.
 
 ## Time spent
 
-About **X h** in total (Part 1 ≈ **Y h**, Part 2 ≈ **Z h**), over the 3–5 h guideline. *(TODO Alonso: real numbers.)* Most of the extra time went into reviewing AI-generated work and checking every data decision against the sample files, so that I can defend it. In Part 2, C# also meant writing small pieces by hand (HL7 parser, CSV reader) instead of using libraries. With a strict 5-hour cap I would have stopped after the ingestion component and the OMOP schema, and listed the loader rules as next steps.
+About **6.5 h** in total (Part 1 ≈ **3 h**, Part 2 ≈ **3.5 h**), over the 3–5 h guideline. Most of the extra time went into reviewing AI-generated work and checking every data decision against the sample files, so that I can defend it. In Part 2, C# also meant writing small pieces by hand (HL7 parser, CSV reader) instead of using libraries. With a strict 5-hour cap I would have stopped after the ingestion component and the OMOP schema, and listed the loader rules as next steps.
 
 ## What I would do next
 
