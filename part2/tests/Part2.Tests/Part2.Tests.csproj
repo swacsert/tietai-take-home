@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <IsPackable>false</IsPackable>
@@ -16,11 +16,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Part2.Canonical\Part2.Canonical.csproj" />
+    <ProjectReference Include="..\..\src\Part2.Ingest\Part2.Ingest.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- The documented example is test input: the doc and the code cannot drift silently. -->
     <None Include="..\..\docs\canonical-event.example.jsonl" Link="canonical-event.example.jsonl" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Tests run against the real sample data, not hand-made copies. -->
+    <None Include="..\..\data\*.hl7;..\..\data\*.json;..\..\data\*.csv" LinkBase="fixtures" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

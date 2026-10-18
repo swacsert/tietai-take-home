@@ -37,7 +37,7 @@ public class CanonicalJsonTests
 
     [Theory]
     [InlineData("\"schema_version\":1,", "\"schema_version\":2,")]                           // future version
-    [InlineData("\"content_hash\":\"9cdbcc0a8dcd8bb82c5015262218e63ce1588d036e2f7712402cd8c882b91f39\",", "")] // missing required field
+    [InlineData("\"content_hash\":\"91e07f34450693de4c9bbd1c1b4d48ce89fc72fddcb5faafeed34556f194f35f\",", "")] // missing required field
     [InlineData("\"schema_version\":1,", "\"schema_version\":1,\"tenant_id\":\"t1\",")]      // unknown field
     [InlineData("\"source_id\":\"100067890\",", "\"source_id\":null,")]                       // null where not allowed
     [InlineData("\"class\":\"inpatient\"", "\"class\":\"icu\"")]                              // value outside the enum

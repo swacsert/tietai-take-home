@@ -71,7 +71,7 @@ How the hash is computed:
 | `source.file` | string | input file name | input file name | |
 | `source.position` | int | message number in the file, from 1 | entry number of the `Encounter`, from 1 | Counts every message, including the ones sent to the DLQ |
 | `source.record_id` | string | `MSH-10` | `Encounter.id` | |
-| `source.record_type` | string | `MSH-9.1^MSH-9.2` (`ADT^A01`) | `Encounter` | The writer uses `A03` (discharge) |
+| `source.record_type` | string | `MSH-9`, split with the declared component separator and re-joined with `^` (`ADT^A01^ADT_A01`) | `Encounter` | The ingestor uses the trigger event `A03` (discharge) |
 | `source.sent_at` | datetime | `MSH-7` | `Bundle.timestamp` | |
 | `source.sender` | string? | `MSH-3` | `null` (the bundle has no sender) | |
 | `source.encoding_characters` | string? | `MSH-1` + `MSH-2` (`\|^~\&`) | `null` | Needed to re-read the raw segments in `unmapped` |
@@ -85,7 +85,7 @@ How the hash is computed:
 | `visit.class` | `inpatient` \| `outpatient` \| `emergency` | `PV1-2` (`I`, `O`, `E`) | `Encounter.class.code` (`IMP`, `AMB`, `EMER`) | |
 | `visit.class_source` | string | `PV1-2` | `Encounter.class.code` | |
 | `visit.start` | datetime | admit datetime | `Encounter.period.start` | |
-| `visit.end` | datetime? | `PV1-45` | `Encounter.period.end` | `null` if absent. The writer decides the OMOP fallback |
+| `visit.end` | datetime? | `PV1-45`; for an `A03` without it, `EVN-2` (with a warning) | `Encounter.period.end` | `null` if absent. The writer decides the OMOP fallback |
 | `diagnoses[].code` | string | `DG1-3.1` | `Condition.code.coding.code` | |
 | `diagnoses[].system` | string | `DG1-3.3` | `Condition.code.coding.system` | Normalized: `ICD10CM` |
 | `diagnoses[].system_source` | string | `DG1-3.3` (`I10`) | coding system URI | |
@@ -105,8 +105,11 @@ How the hash is computed:
   it contains `VIP`. The admit datetime is kept **in full, as received** (`20260315150500`), never
   truncated to the date, so two visits on the same day stay apart. The `A01`, `A08` and `A03` of
   one stay share it.
-  This feed sends the admit datetime in `PV1-48` instead of `PV1-44`; how the ingestor reads it
-  is decided in block 2.
+- **Admit datetime**: `PV1-44` when it has a value. Otherwise `PV1-48`, with the warning
+  `admit_datetime_nonstandard_field`. This feed sends it in `PV1-48`.
+- **Separators** are always the ones the message declares in `MSH-1` and `MSH-2`, never guessed.
+  `ADT00010` declares `@` as component separator but writes `MSH-9` with `^`. There `MSH-9` stays one
+  component (`ADT^A01^ADT_A01`) and the event carries `component_separator_mismatch`.
 - **`ICD10CM`**: HL7 `I10` formally means ICD-10, but the codes in the feed (for example `K35.80`)
   are ICD-10-CM, the vocabulary in `vocab_icd10.csv`.
 
@@ -136,6 +139,9 @@ Only for problems you cannot see from the typed fields. A `null` birth date need
 | Code | Example |
 |---|---|
 | `control_character` | Byte `0x07` inside `ZPV-3` of `ADT00014`. The value is kept as received |
+| `admit_datetime_nonstandard_field` | Admit datetime read from `PV1-48` because `PV1-44` is empty |
+| `component_separator_mismatch` | `MSH-9` of `ADT00010` contains `^` although `MSH-2` declares `@` |
+| `discharge_datetime_from_evn` | `A03` without `PV1-45`: discharge datetime taken from `EVN-2` |
 
 ## Personal data
 
@@ -169,13 +175,13 @@ The HL7 line of the normative example, pretty-printed:
 {
   "schema_version": 1,
   "event_id": "hl7:HIS_SANANDRES:ADT00014",
-  "content_hash": "9cdbcc0a8dcd8bb82c5015262218e63ce1588d036e2f7712402cd8c882b91f39",
+  "content_hash": "91e07f34450693de4c9bbd1c1b4d48ce89fc72fddcb5faafeed34556f194f35f",
   "source": {
     "format": "hl7v2",
     "file": "adt_feed.hl7",
     "position": 17,
     "record_id": "ADT00014",
-    "record_type": "ADT^A01",
+    "record_type": "ADT^A01^ADT_A01",
     "sent_at": "2026-03-15T15:05:00",
     "sender": "HIS_SANANDRES",
     "encoding_characters": "|^~\\&"
@@ -204,6 +210,8 @@ The HL7 line of the normative example, pretty-printed:
       "raw": "ZPV|1|EMERGENCY_DEPT|Readmission within 30 days\u0007 - cognitive decline progression" }
   ],
   "quality_warnings": [
+    { "code": "admit_datetime_nonstandard_field", "location": "PV1-48",
+      "detail": "admit datetime in non-standard field (PV1-44 is empty)" },
     { "code": "control_character", "location": "ZPV-3", "detail": "byte 0x07 kept as received" }
   ]
 }

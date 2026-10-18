@@ -1,3 +1,54 @@
-﻿// Block 1 skeleton. HL7 parsing arrives in block 2, FHIR reading in block 3.
-Console.Error.WriteLine("Part2.Ingest: not implemented yet.");
-return 1;
+﻿using Part2.Ingest;
+using Part2.Ingest.Hl7;
+
+// Usage: Part2.Ingest [--out DIR] FILE...   (.hl7 = HL7 v2 batch)
+var outDirectory = "out";
+var inputs = new List<string>();
+for (var i = 0; i < args.Length; i++)
+{
+    if (args[i] == "--out" && i + 1 < args.Length)
+    {
+        outDirectory = args[++i];
+    }
+    else
+    {
+        inputs.Add(args[i]);
+    }
+}
+
+if (inputs.Count == 0)
+{
+    Console.Error.WriteLine("usage: Part2.Ingest [--out DIR] FILE...");
+    return 2;
+}
+
+foreach (var input in inputs)
+{
+    if (!File.Exists(input))
+    {
+        Console.Error.WriteLine($"input not found: {input}");
+        return 2;
+    }
+
+    var fileName = Path.GetFileName(input);
+    var text = File.ReadAllText(input);
+    IngestResult? result = Path.GetExtension(input).ToLowerInvariant() switch
+    {
+        ".hl7" => Hl7Feed.Ingest(text, fileName),
+        _ => null,
+    };
+    if (result is null)
+    {
+        Console.Error.WriteLine($"unsupported input type: {input}");
+        return 2;
+    }
+
+    OutputWriter.Write(result, outDirectory, fileName);
+    Console.WriteLine($"{fileName}: {result.Events.Count} events, {result.DeadLetters.Count} to DLQ");
+    foreach (var deadLetter in result.DeadLetters)
+    {
+        Console.WriteLine($"  DLQ #{deadLetter.Position}: {deadLetter.Reason}");
+    }
+}
+
+return 0;
