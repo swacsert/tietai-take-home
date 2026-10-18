@@ -50,7 +50,7 @@ I used AI the way I would on the job, and kept a log of what I rejected or corre
 
 ## Time spent
 
-About **6.5 h** in total (Part 1 ≈ **3 h**, Part 2 ≈ **3.5 h**), over the 3–5 h guideline. Most of the extra time was ramp-up: OMOP, FHIR R4 and openEHR were new to me, so I first had to learn the domain vocabulary and map it onto what I already knew from years of HL7 v2 integration on a hospital information system. Once that mapping was in place, the plan and the code went much faster. With a strict 5-hour cap I would have stopped after the ingestion component and the OMOP schema, and listed the loader rules as next steps.
+About **6.5 h** in total (Part 1 ≈ **3 h**, Part 2 ≈ **3.5 h**), over the 3–5 h guideline. Most of the extra time was ramp-up. OMOP CDM and its tables, openEHR and pseudonymisation were new to me. I knew FHIR R4 but had not used it professionally. I also had to work out how an integration platform like Hydra splits work between an edge node and the cloud, what each person on the hospital side would need from the plan, and the acronyms that come with all of it. I learned each concept by mapping it onto what I already knew from years of HL7 v2 integration on a hospital information system. Once that mapping was in place, the plan and the code went much faster. With a strict 5-hour cap I would have stopped after the ingestion component and the OMOP schema, and listed the loader rules as next steps.
 
 ## What I would do next
 
