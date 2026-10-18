@@ -10,7 +10,7 @@ Contexto para Claude Code en VS Code. **Léelo entero antes de escribir código.
   - **Forma de trabajo desde el 2026-10-18 (por tiempo, entrega el martes 20):** se generan los bloques 2-5 seguidos, **sin parar** entre bloques, con un commit por bloque. **La revisión para la defensa se hace después**, sobre el código terminado: Alonso repasa cada clase y cada decisión que tomó la IA (marcadas como "decidida por la IA" en "Decisiones tomadas").
   - Si Alonso quiere escribir él una pieza, guíale sin dársela hecha.
   - Nada de código "por si acaso". Cada clase tiene que justificar su existencia.
-  - Tests que prueben algo real. En una prueba anterior un test generado no probaba nada.
+  - Tests que prueben algo real.
 - **Solo la Parte 2.** La Parte 1 (`/part1`) está cerrada. No la toques ni mezcles sus datos. Al final habrá una revisión global aparte.
 - Commits pequeños, uno por bloque, con mensajes en inglés.
 
@@ -135,10 +135,12 @@ Confirmado con Alonso el 2026-10-18: .NET 10, nombres de proyecto y P1-P4 (ahora
 
 ## Lo que Alonso tiene que comprobar él mismo (para "what I double-checked myself")
 
+Lo comprobado está en el README raíz. Las casillas sin marcar no se han comprobado por separado.
+
 - [ ] Los campos obligatorios de las tres tablas, contra **OMOP CDM 5.4** (documentación de OHDSI), no contra lo que diga la IA.
 - [ ] Los `concept_id` de sexo (8507/8532) y de tipo de visita (9201/9202/9203).
-- [ ] Que el parser lee de verdad los separadores del `MSH`, probándolo con `ADT00010`.
-- [ ] Que relanzar el programa 2 dos veces deja el mismo número de filas.
+- [x] Que el parser lee de verdad los separadores del `MSH`, probándolo con `ADT00010` (ejecución del 2026-10-18).
+- [x] Que relanzar el programa 2 dos veces deja el mismo número de filas (`run.ps1`, 2026-10-18).
 - [ ] Que cada comentario dice lo que el código hace de verdad.
 - [ ] Que cada test prueba algo real.
 

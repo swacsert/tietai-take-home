@@ -240,6 +240,4 @@ Built with Claude Code under my direction, block by block. Every proposal I reje
 logged, with the date and the reason, in [AI_LOG.md](AI_LOG.md) (in Spanish). Three AI errors were
 caught by tests or by checking against the data, not by reading.
 
-> **TODO (Alonso), before sending:** "What I double-checked myself": the CDM 5.4 required fields,
-> concept ids 8507/8532/9201-9203/32817, separators with `ADT00010`, two writer runs giving the same
-> counts, comments matching code, and each test proving something.
+What I double-checked myself is listed in the [root README](../README.md#ai-assistants-where-i-used-them-and-what-i-checked-myself).
