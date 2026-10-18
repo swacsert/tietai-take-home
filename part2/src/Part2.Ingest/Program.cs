@@ -1,7 +1,8 @@
 ﻿using Part2.Ingest;
+using Part2.Ingest.Fhir;
 using Part2.Ingest.Hl7;
 
-// Usage: Part2.Ingest [--out DIR] FILE...   (.hl7 = HL7 v2 batch)
+// Usage: Part2.Ingest [--out DIR] FILE...   (.hl7 = HL7 v2 batch, .json = FHIR R4 Bundle)
 var outDirectory = "out";
 var inputs = new List<string>();
 for (var i = 0; i < args.Length; i++)
@@ -35,6 +36,7 @@ foreach (var input in inputs)
     IngestResult? result = Path.GetExtension(input).ToLowerInvariant() switch
     {
         ".hl7" => Hl7Feed.Ingest(text, fileName),
+        ".json" => FhirBundleMapper.Map(text, fileName),
         _ => null,
     };
     if (result is null)
@@ -48,6 +50,11 @@ foreach (var input in inputs)
     foreach (var deadLetter in result.DeadLetters)
     {
         Console.WriteLine($"  DLQ #{deadLetter.Position}: {deadLetter.Reason}");
+    }
+
+    foreach (var (type, count) in result.UnlinkedResources)
+    {
+        Console.WriteLine($"  not linked to any Encounter (counted, not loaded): {count} {type}");
     }
 }
 

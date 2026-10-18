@@ -1,4 +1,5 @@
 using Part2.Ingest;
+using Part2.Ingest.Fhir;
 using Part2.Ingest.Hl7;
 
 namespace Part2.Tests;
@@ -14,4 +15,6 @@ internal static class Fixtures
         File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "canonical-event.example.jsonl"));
 
     public static IngestResult IngestHl7() => Hl7Feed.Ingest(Read("adt_feed.hl7"), "adt_feed.hl7");
+
+    public static IngestResult IngestFhir() => FhirBundleMapper.Map(Read("fhir_bundle.json"), "fhir_bundle.json");
 }

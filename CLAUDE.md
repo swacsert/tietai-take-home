@@ -47,7 +47,7 @@ Contexto para Claude Code en VS Code. **Léelo entero antes de escribir código.
 ## Datos (`part2/data/`)
 
 - `adt_feed.hl7`: unos 20 mensajes separados por una línea en blanco, con segmentos separados por `\n`. Hay que **tolerar también `\r`**.
-- `fhir_bundle.json`: un Bundle de tipo collection, 26 recursos (Patient, Encounter, Condition, Observation, MedicationStatement).
+- `fhir_bundle.json`: un Bundle de tipo collection, **25 recursos** (4 Patient, 5 Encounter, 5 Condition, 7 Observation, 4 MedicationStatement). Corregido el 2026-10-18: antes decía 26, contando el propio Bundle.
 - `vocab_icd10.csv`: `source_code, source_vocabulary_id, source_name, target_concept_id, target_vocabulary_id, target_concept_name, domain_id`. Imita la relación "Maps to" de OMOP.
 - `FIXTURES_README.md`: el README original de los datos. Lo que dice: *"If you spot more, tell us"*, *"Find what you find. Decide what to quarantine vs. let through. Tell us why"*, *"We want to see what your loader does when a source code has no standard_concept_id"*.
 

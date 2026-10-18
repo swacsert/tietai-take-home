@@ -25,6 +25,8 @@ either side can be rerun or replaced as long as this contract holds.
 These never become events, and they are never dropped silently:
 
 - An HL7 message the ingestor cannot parse goes to `out/dlq/` with the reason.
+- A FHIR Encounter that cannot be mapped goes to `out/dlq/` as a small Bundle with its Patient and
+  linked resources, ready to fix and replay. A bundle that is not valid JSON goes whole, as position 0.
 - A FHIR resource that hangs from no `Encounter` is **counted** in the ingestor's run summary, by resource type.
 
 ## Identity and deduplication
@@ -53,8 +55,8 @@ How the hash is computed:
 - **HL7**: split segments on `\r`, `\n` or `\r\n` and drop empty lines. Empty the values of `MSH-7`
   and `EVN-2` but keep their fields. Join the segments with `\r` and hash the UTF-8 bytes.
   `MSH-7` and `EVN-2` are transmission timestamps, and a resend changes them.
-- **FHIR**: take the `Patient`, the `Encounter` and the linked resources in bundle order,
-  serialize each one as minified JSON, join them with `\n` and hash the UTF-8 bytes.
+- **FHIR**: take the `Patient`, then the `Encounter`, then the linked resources in bundle order.
+  Serialize each one as minified JSON, join them with `\n` and hash the UTF-8 bytes.
 - Lowercase hex, 64 characters.
 - Consumers treat the hash as **opaque**: compare it for equality, never recompute it.
 
