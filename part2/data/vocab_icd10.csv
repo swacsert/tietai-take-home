@@ -1,0 +1,16 @@
+source_code,source_vocabulary_id,source_name,target_concept_id,target_vocabulary_id,target_concept_name,domain_id
+I50.9,ICD10CM,"Heart failure, unspecified",316139,SNOMED,Heart failure,Condition
+I21.4,ICD10CM,Non-ST elevation (NSTEMI) myocardial infarction,4108218,SNOMED,Acute non-ST segment elevation myocardial infarction,Condition
+E11.9,ICD10CM,Type 2 diabetes mellitus without complications,201826,SNOMED,Type 2 diabetes mellitus,Condition
+C50.4,ICD10CM,Malignant neoplasm of upper-outer quadrant of breast,4145948,SNOMED,Malignant tumor of upper outer quadrant of breast,Condition
+C50.9,ICD10CM,"Malignant neoplasm of breast, unspecified",4112853,SNOMED,Malignant tumor of breast,Condition
+C18.2,ICD10CM,Malignant neoplasm of ascending colon,4112752,SNOMED,Malignant tumor of ascending colon,Condition
+C61,ICD10CM,Malignant neoplasm of prostate,4163261,SNOMED,Malignant tumor of prostate,Condition
+J44.1,ICD10CM,COPD with acute exacerbation,4288734,SNOMED,COPD with acute lower respiratory infection,Condition
+N18.5,ICD10CM,"Chronic kidney disease, stage 5",46271022,SNOMED,Stage 5 chronic kidney disease,Condition
+F03,ICD10CM,Unspecified dementia,4182210,SNOMED,Dementia,Condition
+R07.9,ICD10CM,"Chest pain, unspecified",77670,SNOMED,Chest pain,Symptom
+K35.80,ICD10CM,Unspecified acute appendicitis,4274234,SNOMED,Acute appendicitis,Condition
+M54.5,ICD10CM,Low back pain,194696,SNOMED,Low back pain,Condition
+Z51.11,ICD10CM,Encounter for antineoplastic chemotherapy,4087390,SNOMED,Encounter for antineoplastic chemotherapy,Observation
+O80,ICD10CM,Encounter for full-term uncomplicated delivery,4084026,SNOMED,Normal delivery,Observation
