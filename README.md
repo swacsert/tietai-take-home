@@ -50,7 +50,7 @@ I used AI the way I would on the job, and kept a log of what I rejected or corre
 
 ## Time spent
 
-About **6.5 h** in total (Part 1 ≈ **3 h**, Part 2 ≈ **3.5 h**), over the 3–5 h guideline. Most of the extra time went into reviewing AI-generated work and checking every data decision against the sample files, so that I can defend it. In Part 2, C# also meant writing small pieces by hand (HL7 parser, CSV reader) instead of using libraries. With a strict 5-hour cap I would have stopped after the ingestion component and the OMOP schema, and listed the loader rules as next steps.
+About **6.5 h** in total (Part 1 ≈ **3 h**, Part 2 ≈ **3.5 h**), over the 3–5 h guideline. Most of the extra time was ramp-up: OMOP, FHIR R4 and openEHR were new to me, so I first had to learn the domain vocabulary and map it onto what I already knew from years of HL7 v2 integration on a hospital information system. Once that mapping was in place, the plan and the code went much faster. With a strict 5-hour cap I would have stopped after the ingestion component and the OMOP schema, and listed the loader rules as next steps.
 
 ## What I would do next
 
