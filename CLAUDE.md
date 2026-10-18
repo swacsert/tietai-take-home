@@ -88,7 +88,7 @@ Si aparecen más hallazgos, se apuntan aquí y en el README.
 | D4 | **Dos aplicaciones de consola por lotes**. Sin API, colas ni servicio escuchando | El enunciado pide JSONL en disco y un comando por componente |
 | D5 | **El JSONL es la frontera.** El programa 2 lee el fichero; no recibe eventos | Cada programa se relanza por separado y se puede ver en qué lado falló |
 | D6 | **El JSONL no se borra al leerlo** | Permite repetir la carga (replay) |
-| D7 | **Cargador idempotente con clave de origen única** (`*_source_value` con `UNIQUE` + `INSERT OR IGNORE`, o un upsert) | Relanzar no duplica filas y prepara el "DLQ replay with dedup". **Pendiente: decidir la clave de cada tabla** (ojo con `ADT00013` duplicado) |
+| D7 | **Cargador idempotente con clave de origen única** (`*_source_value` con `UNIQUE` + `INSERT OR IGNORE`, o un upsert) | Relanzar no duplica filas y prepara el "DLQ replay with dedup". **Claves (bloque 4):** `person` = `UNIQUE(person_source_value)` con `{emisor canónico}:{id}`; `visit_occurrence` = `UNIQUE(person_id, visit_source_value)` con `hl7:{visit.source_id}` o `fhir:{id}`; `condition_occurrence` se sustituye por visita (D23). Dedup de eventos en `etl_event` (D17) |
 | D8 | **Parser HL7 propio**, sin NHapi | Se evalúa explícitamente leer los separadores del `MSH`. Unas 60 líneas propias se defienden enteras |
 | D9 | **FHIR con `System.Text.Json`**, sin el SDK de Firely | Solo se necesitan unos pocos campos |
 | D10 | **Mapeo detrás de una interfaz `IConceptMapper`** (hoy lee el CSV) | El enunciado pide el mapeo como pieza enchufable |

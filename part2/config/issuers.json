@@ -1,0 +1,8 @@
+// Patient-identifier issuers (assigning authorities) that name the same namespace.
+// Key: the issuer as it arrives in the canonical event. Value: the issuer used in person.person_source_value.
+// Issuers not listed here are used as they arrive.
+{
+  "aliases": {
+    "urn:oid:2.16.724.4.40.100.1": "SAN_ANDRES"
+  }
+}
